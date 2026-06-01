@@ -42,22 +42,6 @@ class CumulocityAdapter:
         self.base_url = base_url  # .rstrip("/")
         self.username = username
         self.password = password
-
-        # Extract tenant_id from base_url if not provided
-        # Expected format: https://TENANT_ID.cumulocity.com or similar
-        if not tenant_id:
-            try:
-                # Extract subdomain (tenant_id) from base_url
-                # e.g., https://t11974744.cumulocity.com -> t11974744
-                from urllib.parse import urlparse
-
-                parsed = urlparse(base_url)
-                domain_parts = parsed.netloc.split(".")
-                if domain_parts:
-                    tenant_id = domain_parts[0]
-            except Exception:
-                pass
-
         self.tenant_id = tenant_id
 
         # Initialize c8y_api client
