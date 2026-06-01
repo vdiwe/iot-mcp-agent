@@ -1,7 +1,7 @@
 """
 iot_mcp_agent/platforms/cumulocity.py
 
-Cumulocity IoT REST API adapter.
+Cumulocity IoT REST API adapter using c8y_api SDK.
 
 Maps the generic tool interface to Cumulocity's REST API so the MCP server
 can work with a real Cumulocity tenant without the agent knowing anything
@@ -10,48 +10,69 @@ about the underlying HTTP calls.
 Cumulocity API docs: https://cumulocity.com/api/core/
 """
 
+import asyncio
 import logging
 from datetime import datetime, timedelta
 from typing import Any
 
-import httpx
+from c8y_api.app import CumulocityApi  # type: ignore[import-untyped]
 
 logger = logging.getLogger(__name__)
 
 
 class CumulocityAdapter:
     """
-    Thin async wrapper around the Cumulocity REST API.
+    Cumulocity IoT adapter using the c8y_api SDK.
 
-    Uses httpx for async HTTP. All methods return plain dicts with the exact
-    same schema as the simulator, ensuring platform-agnostic agent behavior
-    regardless of whether using 'simulate' or 'cumulocity' backend.
+    Uses the official c8y_api library for REST API interactions. All methods return
+    plain dicts with the exact same schema as the simulator, ensuring platform-agnostic
+    agent behavior regardless of whether using 'simulate' or 'cumulocity' backend.
 
     Usage:
-        async with CumulocityAdapter(base_url, user, pwd) as adapter:
-            devices = await adapter.list_devices()
+        adapter = CumulocityAdapter(base_url, username, password, tenant_id)
+        devices = await adapter.list_devices()
+        await adapter.close()
 
-    Or for long-lived adapters, explicitly call aclose():
-        adapter = CumulocityAdapter(base_url, user, pwd)
-        try:
+    Or with context manager:
+        async with CumulocityAdapter(base_url, username, password, tenant_id) as adapter:
             devices = await adapter.list_devices()
-        finally:
-            await adapter.aclose()
     """
 
-    def __init__(self, base_url: str, username: str, password: str):
-        self.base_url = base_url.rstrip("/")
-        self._auth = (username, password)
-        self._client = httpx.AsyncClient(
-            base_url=self.base_url,
-            auth=self._auth,
-            headers={"Accept": "application/json", "Content-Type": "application/json"},
-            timeout=30.0,
+    def __init__(self, base_url: str, username: str, password: str, tenant_id: str | None = None):
+        self.base_url = base_url  # .rstrip("/")
+        self.username = username
+        self.password = password
+
+        # Extract tenant_id from base_url if not provided
+        # Expected format: https://TENANT_ID.cumulocity.com or similar
+        if not tenant_id:
+            try:
+                # Extract subdomain (tenant_id) from base_url
+                # e.g., https://t11974744.cumulocity.com -> t11974744
+                from urllib.parse import urlparse
+
+                parsed = urlparse(base_url)
+                domain_parts = parsed.netloc.split(".")
+                if domain_parts:
+                    tenant_id = domain_parts[0]
+            except Exception:
+                pass
+
+        self.tenant_id = tenant_id
+
+        # Initialize c8y_api client
+        # c8y_api expects base_url without /api/v1/ suffix
+        self._client = CumulocityApi(
+            base_url=base_url,
+            tenant_id=tenant_id,
+            username=username,
+            password=password,
         )
 
-    async def aclose(self) -> None:
-        """Close the underlying httpx AsyncClient to clean up resources."""
-        await self._client.aclose()
+    async def close(self) -> None:
+        """Close the underlying Cumulocity client and clean up resources."""
+        # c8y_api doesn't require explicit close, but we provide it for consistency
+        pass
 
     async def __aenter__(self) -> "CumulocityAdapter":
         """Async context manager entry."""
@@ -59,7 +80,7 @@ class CumulocityAdapter:
 
     async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         """Async context manager exit — closes the client."""
-        await self.aclose()
+        await self.close()
 
     async def list_devices(
         self,
@@ -210,7 +231,7 @@ class CumulocityAdapter:
     ) -> dict:
         # Store config in managed object custom fragment
         payload = {config_key: config_value, "agent_update_reason": reason}
-        resp = await self._put(f"/inventory/managedObjects/{device_id}", json=payload)
+        await self._put(f"/inventory/managedObjects/{device_id}", json=payload)
         return {
             "success": True,
             "device_id": device_id,
@@ -311,19 +332,73 @@ class CumulocityAdapter:
     # ── HTTP helpers ─────────────────────────────────────────────────────────
 
     async def _get(self, path: str, params: dict | None = None) -> dict:
-        r = await self._client.get(path, params=params)
-        r.raise_for_status()
-        return r.json()
+        """Make a GET request using c8y_api client in a thread pool."""
+
+        def _blocking_get() -> dict:
+            # c8y_api client methods are synchronous
+            if path == "/inventory/managedObjects":
+                result = self._client.inventory.get_all(**params or {})
+                # result is a list; convert to dict format expected by handlers
+                items = [
+                    item.__dict__ if hasattr(item, "__dict__") else item for item in (result or [])
+                ]
+                return {"managedObjects": items, "statistics": {"totalResult": len(items)}}
+            elif "/inventory/managedObjects/" in path and path.count("/") == 3:
+                # Single device fetch: /inventory/managedObjects/{id}
+                device_id = path.split("/")[-1]
+                result = self._client.inventory.get_by_id(device_id)
+                return result.__dict__ if hasattr(result, "__dict__") else result
+            elif "/childAssets" in path:
+                # Child assets fetch
+                device_id = path.split("/")[3]
+                result = self._client.inventory.get_child_assets(device_id)
+                items = [
+                    item.__dict__ if hasattr(item, "__dict__") else item for item in (result or [])
+                ]
+                return {"childAssets": items}
+            elif path == "/measurement/measurements":
+                result = self._client.measurements.get_all(**params or {})
+                items = [
+                    item.__dict__ if hasattr(item, "__dict__") else item for item in (result or [])
+                ]
+                return {"measurements": items, "statistics": {"totalResult": len(items)}}
+            elif path == "/alarm/alarms":
+                result = self._client.alarms.get_all(**params or {})
+                items = [
+                    item.__dict__ if hasattr(item, "__dict__") else item for item in (result or [])
+                ]
+                return {"alarms": items, "statistics": {"totalResult": len(items)}}
+            else:
+                raise ValueError(f"Unsupported GET path: {path}")
+
+        return await asyncio.to_thread(_blocking_get)
 
     async def _post(self, path: str, json: dict) -> dict:
-        r = await self._client.post(path, json=json)
-        r.raise_for_status()
-        return r.json()
+        """Make a POST request using c8y_api client in a thread pool."""
+
+        def _blocking_post() -> dict:
+            if path == "/alarm/alarms":
+                result = self._client.alarms.create(**json)
+            else:
+                raise ValueError(f"Unsupported POST path: {path}")
+
+            return result.__dict__ if hasattr(result, "__dict__") else result
+
+        return await asyncio.to_thread(_blocking_post)
 
     async def _put(self, path: str, json: dict) -> dict:
-        r = await self._client.put(path, json=json)
-        r.raise_for_status()
-        return r.json()
+        """Make a PUT request using c8y_api client in a thread pool."""
+
+        def _blocking_put() -> dict:
+            if "/inventory/managedObjects/" in path and path.count("/") == 3:
+                device_id = path.split("/")[-1]
+                result = self._client.inventory.update(device_id, **json)
+            else:
+                raise ValueError(f"Unsupported PUT path: {path}")
+
+            return result.__dict__ if hasattr(result, "__dict__") else result
+
+        return await asyncio.to_thread(_blocking_put)
 
     @staticmethod
     def _normalise_device(raw: dict) -> dict:

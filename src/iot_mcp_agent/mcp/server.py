@@ -47,10 +47,10 @@ def build_server(platform: str = "simulate") -> Server:
         Configured MCP Server instance
 
     Note:
-        For Cumulocity adapters, the underlying httpx.AsyncClient will be closed
+        For Cumulocity adapters, the underlying c8y_api.CumulocityClient will be closed
         when the process exits. For long-lived embedded servers, consider using
         the adapter as a context manager (CumulocityAdapter.__aenter__/__aexit__)
-        or call adapter.aclose() explicitly when the server is shut down.
+        or call adapter.close() explicitly when the server is shut down.
     """
     server = Server("iot-mcp-agent")
 
@@ -66,11 +66,12 @@ def build_server(platform: str = "simulate") -> Server:
             base_url=settings.c8y_base_url,
             username=settings.c8y_username,
             password=settings.c8y_password,
+            tenant_id=settings.c8y_tenant_id if settings.c8y_tenant_id else None,
         )
-        # Note: The adapter's httpx.AsyncClient is not explicitly closed here.
+        # Note: The adapter's c8y_api.CumulocityClient is not explicitly closed here.
         # For normal MCP server execution (runs until stdio closes), cleanup happens
         # on process exit. For embedded/long-lived scenarios, wrap the server
-        # initialization in try/finally and call adapter.aclose() on shutdown.
+        # initialization in try/finally and call adapter.close() on shutdown.
         logger.info("Connected to Cumulocity IoT: %s", settings.c8y_base_url)
     elif platform in ("aws_iot", "azure_iot"):
         raise NotImplementedError(

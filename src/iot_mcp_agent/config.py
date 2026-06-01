@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     # IoT Platform
     platform: str = "simulate"
     c8y_base_url: str = ""
+    c8y_tenant_id: str = "t11974744"
     c8y_username: str = ""
     c8y_password: str = ""
 
