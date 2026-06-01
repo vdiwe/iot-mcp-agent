@@ -28,7 +28,7 @@ class DeviceSimulator:
     """
 
     def __init__(self, seed: int = 42):
-        random.seed(seed)
+        self._rng = random.Random(seed)
         self._devices = self._generate_devices()
         self._alarm_store: list[dict] = []
         self._config_store: dict[str, dict] = {}
@@ -73,9 +73,35 @@ class DeviceSimulator:
         if not device:
             return {"error": f"Device {device_id} not found"}
 
-        readings = self._generate_readings(device, limit)
+        # Generate extra readings to ensure coverage of the requested time range
+        readings = self._generate_readings(device, limit * 3)
         if measurement_type:
             readings = [r for r in readings if r["type"] == measurement_type]
+
+        # Filter by time range if from_time or to_time is specified
+        if from_time or to_time:
+            try:
+                # Parse ISO format timestamps, handling both with and without 'Z' suffix
+                from_dt = (
+                    datetime.fromisoformat(from_time.replace("Z", "+00:00")) if from_time else None
+                )
+                to_dt = datetime.fromisoformat(to_time.replace("Z", "+00:00")) if to_time else None
+
+                readings = [
+                    r
+                    for r in readings
+                    if (
+                        from_dt is None
+                        or datetime.fromisoformat(r["timestamp"].replace("Z", "+00:00")) >= from_dt
+                    )
+                    and (
+                        to_dt is None
+                        or datetime.fromisoformat(r["timestamp"].replace("Z", "+00:00")) <= to_dt
+                    )
+                ]
+            except (ValueError, AttributeError):
+                # If time parsing fails, return all readings as-is
+                pass
 
         return {
             "device_id": device_id,
@@ -100,9 +126,7 @@ class DeviceSimulator:
             alarms = [a for a in alarms if a["status"] == status]
         return {"total": len(alarms), "alarms": alarms[:limit]}
 
-    async def create_alarm(
-        self, device_id: str, type: str, severity: str, text: str
-    ) -> dict:
+    async def create_alarm(self, device_id: str, type: str, severity: str, text: str) -> dict:
         alarm = {
             "id": str(uuid.uuid4())[:8],
             "device_id": device_id,
@@ -159,10 +183,7 @@ class DeviceSimulator:
         online = sum(1 for d in devices if d["status"] == "AVAILABLE")
         offline = sum(1 for d in devices if d["status"] == "UNAVAILABLE")
         active_alarms = [a for a in self._alarm_store if a["status"] == "ACTIVE"]
-        group_alarms = [
-            a for a in active_alarms
-            if a["device_id"] in {d["id"] for d in devices}
-        ]
+        group_alarms = [a for a in active_alarms if a["device_id"] in {d["id"] for d in devices}]
         return {
             "group": group_name,
             "total_devices": len(devices),
@@ -201,10 +222,10 @@ class DeviceSimulator:
                     "group": group,
                     "status": status,
                     "last_message": (
-                        datetime.utcnow() - timedelta(seconds=random.randint(10, 300))
+                        datetime.utcnow() - timedelta(seconds=self._rng.randint(10, 300))
                     ).isoformat(),
                     "firmware": "v2.4.1",
-                    "signal_strength": random.randint(60, 100) if status == "AVAILABLE" else 0,
+                    "signal_strength": self._rng.randint(60, 100) if status == "AVAILABLE" else 0,
                 }
 
         return devices
@@ -230,16 +251,18 @@ class DeviceSimulator:
             hour = t.hour + t.minute / 60
             # Normal daily cycle: 18–28°C
             base = 23 + 5 * math.sin((hour - 6) * math.pi / 12)
-            noise = random.gauss(0, 0.3)
+            noise = self._rng.gauss(0, 0.3)
             # Inject a spike on the faulty sensor
             spike = 65 if is_faulty and i < 6 else 0
             value = round(base + noise + spike, 1)
-            readings.append({
-                "timestamp": t.isoformat(),
-                "type": "c8y_Temperature",
-                "value": value,
-                "unit": "°C",
-            })
+            readings.append(
+                {
+                    "timestamp": t.isoformat(),
+                    "type": "c8y_Temperature",
+                    "value": value,
+                    "unit": "°C",
+                }
+            )
         return readings
 
     def _vibration_readings(self, device: dict, count: int, now: datetime) -> list[dict]:
@@ -249,25 +272,29 @@ class DeviceSimulator:
         for i in range(count):
             t = now - timedelta(minutes=i * 10)
             base = 1.2
-            noise = random.gauss(0, 0.08)
+            noise = self._rng.gauss(0, 0.08)
             trend = (count - i) * 0.03 if is_degrading else 0
             value = round(base + noise + trend, 3)
-            readings.append({
-                "timestamp": t.isoformat(),
-                "type": "c8y_Vibration",
-                "value": value,
-                "unit": "mm/s",
-            })
+            readings.append(
+                {
+                    "timestamp": t.isoformat(),
+                    "type": "c8y_Vibration",
+                    "value": value,
+                    "unit": "mm/s",
+                }
+            )
         return readings
 
     def _env_readings(self, device: dict, count: int, now: datetime) -> list[dict]:
         readings = []
         for i in range(count):
             t = now - timedelta(minutes=i * 15)
-            readings.append({
-                "timestamp": t.isoformat(),
-                "type": "c8y_Humidity",
-                "value": round(random.uniform(40, 70), 1),
-                "unit": "%RH",
-            })
+            readings.append(
+                {
+                    "timestamp": t.isoformat(),
+                    "type": "c8y_Humidity",
+                    "value": round(self._rng.uniform(40, 70), 1),
+                    "unit": "%RH",
+                }
+            )
         return readings

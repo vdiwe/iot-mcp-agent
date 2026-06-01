@@ -23,9 +23,20 @@ class CumulocityAdapter:
     """
     Thin async wrapper around the Cumulocity REST API.
 
-    Uses httpx for async HTTP. All methods return plain dicts
-    that match the same shape the simulator returns, so the MCP
-    server and agents are platform-agnostic.
+    Uses httpx for async HTTP. All methods return plain dicts with the exact
+    same schema as the simulator, ensuring platform-agnostic agent behavior
+    regardless of whether using 'simulate' or 'cumulocity' backend.
+
+    Usage:
+        async with CumulocityAdapter(base_url, user, pwd) as adapter:
+            devices = await adapter.list_devices()
+
+    Or for long-lived adapters, explicitly call aclose():
+        adapter = CumulocityAdapter(base_url, user, pwd)
+        try:
+            devices = await adapter.list_devices()
+        finally:
+            await adapter.aclose()
     """
 
     def __init__(self, base_url: str, username: str, password: str):
@@ -37,6 +48,18 @@ class CumulocityAdapter:
             headers={"Accept": "application/json", "Content-Type": "application/json"},
             timeout=30.0,
         )
+
+    async def aclose(self) -> None:
+        """Close the underlying httpx AsyncClient to clean up resources."""
+        await self._client.aclose()
+
+    async def __aenter__(self) -> "CumulocityAdapter":
+        """Async context manager entry."""
+        return self
+
+    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        """Async context manager exit — closes the client."""
+        await self.aclose()
 
     async def list_devices(
         self,
@@ -58,14 +81,28 @@ class CumulocityAdapter:
         devices = [self._normalise_device(d) for d in resp.get("managedObjects", [])]
 
         if group:
-            # Filter by group name — in production you'd look up the group ID first
+            # Filter by group name. Note: Cumulocity stores group membership via child asset
+            # relationships on the group managed object, not on individual devices. This filters
+            # by a custom group field if present; for full group membership queries, use
+            # get_device_group_summary() or look up the group ID and query its child assets.
             devices = [d for d in devices if d.get("group") == group]
 
-        return {"total": resp.get("statistics", {}).get("totalResult", len(devices)), "devices": devices}
+        return {
+            "total": resp.get("statistics", {}).get("totalResult", len(devices)),
+            "devices": devices,
+        }
 
     async def get_device(self, device_id: str) -> dict:
         resp = await self._get(f"/inventory/managedObjects/{device_id}")
-        return self._normalise_device(resp)
+        device = self._normalise_device(resp)
+        # Extract custom config fragments from the response
+        # (any custom fragments beyond standard c8y_* fields)
+        config = {}
+        for key, val in resp.items():
+            if not key.startswith("c8y_") and key not in ("id", "name", "type", "lastUpdated"):
+                config[key] = val
+        device["config"] = config
+        return device
 
     async def get_measurements(
         self,
@@ -97,15 +134,34 @@ class CumulocityAdapter:
             for frag_key, frag_val in m.items():
                 if frag_key.startswith("c8y_") and isinstance(frag_val, dict):
                     for series_key, series_val in frag_val.items():
-                        measurements.append({
-                            "timestamp": m.get("time"),
-                            "type": frag_key,
-                            "series": series_key,
-                            "value": series_val.get("value"),
-                            "unit": series_val.get("unit"),
-                        })
+                        measurements.append(
+                            {
+                                "timestamp": m.get("time"),
+                                "type": frag_key,
+                                "series": series_key,
+                                "value": series_val.get("value"),
+                                "unit": series_val.get("unit"),
+                            }
+                        )
 
-        return {"device_id": device_id, "measurements": measurements}
+        # Get device name for consistency with simulator response shape
+        device_name = "Unknown"
+        try:
+            device_resp = await self._get(f"/inventory/managedObjects/{device_id}")
+            device_name = device_resp.get("name", device_id)
+        except Exception:
+            # If lookup fails, fall back to device_id
+            device_name = device_id
+
+        # Extract unit from first measurement if available
+        unit = measurements[0]["unit"] if measurements else None
+
+        return {
+            "device_id": device_id,
+            "device_name": device_name,
+            "measurements": measurements[:limit],
+            "unit": unit,
+        }
 
     async def get_alarms(
         self,
@@ -137,9 +193,7 @@ class CumulocityAdapter:
         ]
         return {"total": len(alarms), "alarms": alarms}
 
-    async def create_alarm(
-        self, device_id: str, type: str, severity: str, text: str
-    ) -> dict:
+    async def create_alarm(self, device_id: str, type: str, severity: str, text: str) -> dict:
         payload = {
             "source": {"id": device_id},
             "type": type,
@@ -176,12 +230,22 @@ class CumulocityAdapter:
         # (e.g. Cumulocity SmartREST, AWS SNS, SendGrid, Slack webhook)
         logger.info(
             "NOTIFICATION [%s] to %s | %s | %s | priority=%s",
-            channel, recipient, subject, message[:80], priority,
+            channel,
+            recipient,
+            subject,
+            message[:80],
+            priority,
         )
         return {"success": True, "channel": channel, "recipient": recipient}
 
     async def get_device_group_summary(self, group_name: str) -> dict:
-        # Look up the group managed object, then aggregate child devices
+        """
+        Get aggregated health summary for all devices in a group.
+
+        Fetches the group, retrieves all child devices, and aggregates their
+        status, alarms, and types to match the simulator response schema.
+        """
+        # Look up the group managed object
         params = {"type": "c8y_DeviceGroup", "text": group_name, "pageSize": 5}
         resp = await self._get("/inventory/managedObjects", params=params)
         groups = resp.get("managedObjects", [])
@@ -192,11 +256,56 @@ class CumulocityAdapter:
         children_resp = await self._get(
             f"/inventory/managedObjects/{group_id}/childAssets", params={"pageSize": 200}
         )
-        devices = children_resp.get("references", [])
+        child_refs = children_resp.get("references", [])
+
+        # Fetch full device objects to get status
+        devices = []
+        for ref in child_refs:
+            try:
+                device_id = ref.get("id")
+                if device_id:
+                    device = await self._get(f"/inventory/managedObjects/{device_id}")
+                    devices.append(device)
+            except Exception as exc:
+                logger.debug("Failed to fetch device %s: %s", ref.get("id"), exc)
+
+        # Aggregate device status
+        online = sum(
+            1 for d in devices if d.get("c8y_Availability", {}).get("status") == "AVAILABLE"
+        )
+        offline = sum(
+            1 for d in devices if d.get("c8y_Availability", {}).get("status") == "UNAVAILABLE"
+        )
+        maintenance = len(devices) - online - offline
+
+        # Fetch alarms for all devices in the group
+        params_alarms = {"pageSize": 1000}
+        alarms_resp = await self._get("/alarm/alarms", params=params_alarms)
+        all_alarms = alarms_resp.get("alarms", [])
+
+        # Filter to only alarms from devices in this group
+        device_ids = {d.get("id") for d in devices}
+        group_alarms = [a for a in all_alarms if a.get("source", {}).get("id") in device_ids]
+        active_alarms = sum(1 for a in group_alarms if a.get("status") == "ACTIVE")
+        critical_alarms = sum(
+            1
+            for a in group_alarms
+            if a.get("status") == "ACTIVE" and a.get("severity") == "CRITICAL"
+        )
+
+        # Collect device types
+        device_types = list({d.get("type") for d in devices if d.get("type")})
+
         return {
             "group": group_name,
             "group_id": group_id,
             "total_devices": len(devices),
+            "online": online,
+            "offline": offline,
+            "maintenance": maintenance,
+            "active_alarms": active_alarms,
+            "critical_alarms": critical_alarms,
+            "device_types": device_types,
         }
 
     # ── HTTP helpers ─────────────────────────────────────────────────────────
@@ -219,11 +328,15 @@ class CumulocityAdapter:
     @staticmethod
     def _normalise_device(raw: dict) -> dict:
         avail = raw.get("c8y_Availability", {}).get("status", "UNKNOWN")
+        # Attempt to extract group name from custom fields if present
+        group = None
+        if "c8y_GroupInfo" in raw:
+            group = raw["c8y_GroupInfo"].get("name")
         return {
             "id": raw.get("id"),
             "name": raw.get("name"),
             "type": raw.get("type"),
             "status": avail,
             "last_message": raw.get("lastUpdated"),
-            "group": None,  # Populated separately if needed
+            "group": group,
         }

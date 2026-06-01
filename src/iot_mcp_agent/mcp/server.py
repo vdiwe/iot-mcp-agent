@@ -2,7 +2,14 @@
 iot_mcp_agent/mcp/server.py
 
 MCP Server that exposes IoT platform capabilities as tools.
-Supports Cumulocity IoT, AWS IoT Core, Azure IoT Hub, and a built-in simulator.
+
+Supported platforms:
+  - 'simulate': Built-in synthetic IoT fleet
+  - 'cumulocity': Cumulocity IoT REST API
+
+Planned platforms (not yet implemented):
+  - 'aws_iot': AWS IoT Core
+  - 'azure_iot': Azure IoT Hub
 """
 
 import json
@@ -29,10 +36,21 @@ def build_server(platform: str = "simulate") -> Server:
     Build and configure the MCP server with all IoT tools.
 
     Args:
-        platform: One of 'cumulocity', 'aws_iot', 'azure_iot', 'simulate'
+        platform: One of:
+            - 'simulate' (default): Synthetic IoT fleet
+            - 'cumulocity': Cumulocity IoT REST API
+            - 'aws_iot': AWS IoT Core (planned, not yet implemented)
+            - 'azure_iot': Azure IoT Hub (planned, not yet implemented)
+        Raises ValueError if platform is not supported or not yet implemented.
 
     Returns:
         Configured MCP Server instance
+
+    Note:
+        For Cumulocity adapters, the underlying httpx.AsyncClient will be closed
+        when the process exits. For long-lived embedded servers, consider using
+        the adapter as a context manager (CumulocityAdapter.__aenter__/__aexit__)
+        or call adapter.aclose() explicitly when the server is shut down.
     """
     server = Server("iot-mcp-agent")
 
@@ -49,9 +67,22 @@ def build_server(platform: str = "simulate") -> Server:
             username=settings.c8y_username,
             password=settings.c8y_password,
         )
+        # Note: The adapter's httpx.AsyncClient is not explicitly closed here.
+        # For normal MCP server execution (runs until stdio closes), cleanup happens
+        # on process exit. For embedded/long-lived scenarios, wrap the server
+        # initialization in try/finally and call adapter.aclose() on shutdown.
         logger.info("Connected to Cumulocity IoT: %s", settings.c8y_base_url)
+    elif platform in ("aws_iot", "azure_iot"):
+        raise NotImplementedError(
+            f"Platform '{platform}' is planned but not yet implemented. "
+            "Currently supported: 'simulate', 'cumulocity'"
+        )
     else:
-        raise ValueError(f"Unsupported platform: {platform}")
+        raise ValueError(
+            f"Unknown platform: '{platform}'. "
+            "Supported: 'simulate', 'cumulocity'. "
+            "Planned: 'aws_iot', 'azure_iot'"
+        )
 
     device_tools = DeviceTools(adapter)
     alarm_tools = AlarmTools(adapter)

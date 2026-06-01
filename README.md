@@ -13,7 +13,15 @@
 
 ## 🌟 What Is This?
 
-`iot-mcp-agent` is an open-source framework that connects **AI reasoning** to **real industrial IoT platforms** (Cumulocity IoT, AWS IoT Core, Azure IoT Hub) through the **Model Context Protocol**.
+`iot-mcp-agent` is an open-source framework that connects **AI reasoning** to **industrial IoT platforms** through the **Model Context Protocol**.
+
+**Currently supported platforms:**
+- ✅ **Cumulocity IoT** (production-ready REST API adapter)
+- ✅ **Built-in simulator** (for demo and testing)
+
+**Planned platforms (roadmap):**
+- 🔜 AWS IoT Core
+- 🔜 Azure IoT Hub
 
 Instead of writing brittle if-else rules for device monitoring, you define **goals** and let the agent reason about what actions to take — pulling telemetry, diagnosing anomalies, triggering alerts, and updating device configurations autonomously.
 
@@ -45,11 +53,11 @@ Device Telemetry ──► MCP Server ──► AI Agent ──► Decision ─�
 │  ┌──────────────┐    ┌──────────────┐    ┌──────────┐  │
 │  │  MCP Server  │    │  AI Agent    │    │  Action  │  │
 │  │              │    │              │    │  Engine  │  │
-│  │ • get_device │◄──►│ • Reasoning  │───►│          │  │
-│  │ • get_alarms │    │ • Planning   │    │• Alerts  │  │
-│  │ • get_metrics│    │ • Tool Use   │    │• Configs │  │
-│  │ • set_config │    │ • Memory     │    │• Tickets │  │
-│  │ • send_alert │    │              │    │• Reports │  │
+│  │ • list_devices│◄─►│ • Reasoning  │───►│          │  │
+│  │ • get_device  │   │ • Planning   │    │• Alerts  │  │
+│  │ • get_measurements   │ • Tool Use   │    │• Configs │  │
+│  │ • update_device_config   │ • Memory     │    │• Tickets │  │
+│  │ • send_notification      │              │    │• Reports │  │
 │  └──────────────┘    └──────────────┘    └──────────┘  │
 │          │                                              │
 │  ┌───────▼──────────────────────────────────────┐      │
@@ -81,12 +89,25 @@ cp .env.example .env
 ### Run the Demo (Simulated Devices)
 
 ```bash
-# Start MCP server with simulated IoT data
-python -m iot_mcp_agent.mcp.server simulate
+  # The agent spawns its own MCP server subprocess — just run it directly
+  python -m iot_mcp_agent --platform simulate --goal "Monitor all devices and alert on any anomalies"
+  ```
 
-# In another terminal, run the agent
+  **Note:** You don't need to start the MCP server separately. `BaseAgent` and `MonitorAgent` spawn the server internally via stdio.
+
+  ### Run Against Real Cumulocity
+
+```
+
+### Run Against Real Cumulocity
+### Run the Demo (Simulated Devices)
+
+```bash
+# The agent spawns its own MCP server subprocess — just run it directly
 python -m iot_mcp_agent --platform simulate --goal "Monitor all devices and alert on any anomalies"
 ```
+
+**Note:** You don't need to start the MCP server separately. `BaseAgent` and `MonitorAgent` spawn the server internally via stdio.
 
 ### Run Against Real Cumulocity
 
@@ -146,7 +167,7 @@ iot-mcp-agent/
 `.env.example`:
 ```env
 # IoT Platform
-PLATFORM=cumulocity              # cumulocity | aws_iot | azure_iot | simulate
+PLATFORM=simulate                # Currently supported: simulate | cumulocity
 C8Y_BASE_URL=https://tenant.cumulocity.com
 C8Y_USERNAME=user@example.com
 C8Y_PASSWORD=
@@ -171,9 +192,6 @@ LOG_LEVEL=INFO
 
 ```python
 from iot_mcp_agent import MonitorAgent
-
-agent = MonitorAgent(
-    goal="""
     Monitor all temperature sensors on the factory floor.
     If any sensor reads above 85°C:
     1. Check if neighbouring sensors also show elevation
@@ -187,13 +205,21 @@ agent = MonitorAgent(
 await agent.run()
 ```
 
-### Predictive Maintenance
+### Predictive Maintenance *(To be implemented)*
 
 ```python
-from iot_mcp_agent import DiagnosticAgent
+# Coming soon: DiagnosticAgent specialized for predictive maintenance
+# For now, use BaseAgent with this goal:
 
-agent = DiagnosticAgent(
-    goal="""
+from iot_mcp_agent.agents import BaseAgent
+
+agent = BaseAgent(
+  python -m iot_mcp_agent --platform simulate --goal "Monitor all devices and alert on any anomalies"
+  ```
+    
+  **Note:** You don't need to start the MCP server separately. `BaseAgent` and `MonitorAgent` spawn the server internally via stdio.
+    
+  ### Run Against Real Cumulocity
     Analyse vibration data for all motors in the 'Pump Station' device group.
     Compare current readings to the 30-day baseline.
     Flag any motors showing >20% deviation and estimate time-to-failure
@@ -204,6 +230,8 @@ agent = DiagnosticAgent(
 report = await agent.run_once()
 print(report)
 ```
+
+**Note:** `DiagnosticAgent` is planned but not yet implemented. Currently available: `BaseAgent`, `MonitorAgent`.
 
 ---
 
@@ -219,16 +247,4 @@ Contributions welcome! See [CONTRIBUTING.md](docs/CONTRIBUTING.md).
 
 ---
 
-## 📄 License
-
-MIT License — see [LICENSE](LICENSE)
-
----
-
-## 👤 Author
-
-**Vachaspati Diwevedi**
-Solution Architect & Technical Delivery Manager | IoT + Cloud + Agentic AI
 [LinkedIn](https://linkedin.com/in/vachaspati-diwevedi) · [Email](mailto:vachhy@gmail.com)
-
-*16+ years building enterprise IoT and integration platforms at Software AG and Cumulocity.*
