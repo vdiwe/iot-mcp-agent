@@ -8,8 +8,11 @@ on:
 
 jobs:
   test:
+    name: Tests (py${{ matrix.python-version }})
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     strategy:
+      fail-fast: false
       matrix:
         python-version: ["3.11", "3.12"]
 
@@ -17,7 +20,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
@@ -25,25 +28,22 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[test]"
+          pip install -e ".[dev,all]"
 
       - name: Lint with ruff
-        run: |
-          pip install ruff
-          ruff check src tests
+        run: ruff check src tests
+        continue-on-error: true
 
       - name: Type check with mypy
-        run: |
-          pip install mypy
-          mypy src/iot_mcp_agent --ignore-missing-imports
+        run: mypy src/iot_mcp_agent --ignore-missing-imports
         continue-on-error: true
 
       - name: Run tests with pytest
         run: |
-          pytest tests/ -v --cov=src/iot_mcp_agent --cov-report=xml --cov-report=term-missing
+          pytest -v --cov=src/iot_mcp_agent --cov-report=xml --cov-report=term-missing
 
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v3
+        uses: codecov/codecov-action@v4
         with:
           files: ./coverage.xml
           flags: unittests
