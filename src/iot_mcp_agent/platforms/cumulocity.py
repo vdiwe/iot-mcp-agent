@@ -12,7 +12,7 @@ Cumulocity API docs: https://cumulocity.com/api/core/
 
 import asyncio
 import logging
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from c8y_api.app import CumulocityApi  # type: ignore[import-untyped]
@@ -129,9 +129,11 @@ class CumulocityAdapter:
         if to_time:
             params["dateTo"] = to_time
         else:
-            params["dateTo"] = datetime.utcnow().isoformat() + "Z"
+            params["dateTo"] = datetime.now(UTC).isoformat().replace("+00:00", "Z")
         if not from_time:
-            params["dateFrom"] = (datetime.utcnow() - timedelta(hours=24)).isoformat() + "Z"
+            params["dateFrom"] = (
+                datetime.now(UTC) - timedelta(hours=24)
+            ).isoformat().replace("+00:00", "Z")
 
         resp = await self._get("/measurement/measurements", params=params)
         measurements = []
@@ -207,7 +209,7 @@ class CumulocityAdapter:
             "severity": severity,
             "status": "ACTIVE",
             "text": text,
-            "time": datetime.utcnow().isoformat() + "Z",
+            "time": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
         }
         resp = await self._post("/alarm/alarms", json=payload)
         return {"success": True, "alarm_id": resp.get("id"), "alarm": resp}
