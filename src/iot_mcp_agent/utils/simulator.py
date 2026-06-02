@@ -11,7 +11,7 @@ a live IoT platform subscription.
 import math
 import random
 import uuid
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 
@@ -135,7 +135,7 @@ class DeviceSimulator:
             "severity": severity,
             "status": "ACTIVE",
             "text": text,
-            "created_at": datetime.utcnow().isoformat(),
+            "created_at": datetime.now(UTC).isoformat(),
         }
         self._alarm_store.append(alarm)
         return {"success": True, "alarm_id": alarm["id"], "alarm": alarm}
@@ -153,7 +153,7 @@ class DeviceSimulator:
             "device_id": device_id,
             "updated": {config_key: config_value},
             "reason": reason,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
         }
 
     async def send_notification(
@@ -171,7 +171,7 @@ class DeviceSimulator:
             "recipient": recipient,
             "subject": subject,
             "priority": priority,
-            "sent_at": datetime.utcnow().isoformat(),
+            "sent_at": datetime.now(UTC).isoformat(),
             "note": "[SIMULATED — no actual notification sent]",
         }
 
@@ -222,7 +222,7 @@ class DeviceSimulator:
                     "group": group,
                     "status": status,
                     "last_message": (
-                        datetime.utcnow() - timedelta(seconds=self._rng.randint(10, 300))
+                        datetime.now(UTC) - timedelta(seconds=self._rng.randint(10, 300))
                     ).isoformat(),
                     "firmware": "v2.4.1",
                     "signal_strength": self._rng.randint(60, 100) if status == "AVAILABLE" else 0,
@@ -232,7 +232,7 @@ class DeviceSimulator:
 
     def _generate_readings(self, device: dict, count: int) -> list[dict]:
         dtype = device["type"]
-        now = datetime.utcnow()
+        now = datetime.now(UTC)
 
         if dtype == "c8y_TemperatureSensor":
             return self._temperature_readings(device, count, now)

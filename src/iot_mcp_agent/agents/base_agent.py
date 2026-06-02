@@ -16,7 +16,7 @@ import json
 import logging
 import sys
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from mcp import ClientSession, StdioServerParameters
@@ -35,7 +35,7 @@ class AgentRun:
     """Record of a single agent run."""
 
     goal: str
-    started_at: datetime = field(default_factory=datetime.utcnow)
+    started_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     finished_at: datetime | None = None
     iterations: int = 0
     tools_called: list[dict] = field(default_factory=list)
@@ -177,7 +177,7 @@ Guidelines:
                     logger.warning("Agent hit max iterations (%d)", self.max_iterations)
                     run.final_summary = "Max iterations reached before goal completion."
 
-        run.finished_at = datetime.utcnow()
+        run.finished_at = datetime.now(UTC)
         logger.info(
             "Run complete. Duration: %.1fs | Iterations: %d | Tools called: %d | Actions: %d",
             run.duration_seconds(),
