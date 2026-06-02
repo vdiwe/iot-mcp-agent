@@ -1,0 +1,1 @@
+"""IoT platform adapters."""
